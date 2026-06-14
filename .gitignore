@@ -1,0 +1,30 @@
+# Maven / Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+# Nacos build outputs
+distribution/target/
+logs/
+data/
+work/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend/static generated files should not live in backend repo
+console-ui/
+console-ui-next/
+console/src/main/resources/static/
+node_modules/
+dist/
+build/
