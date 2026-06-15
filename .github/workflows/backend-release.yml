@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
 
-          BIN_NAME="nacos-backend-${VERSION}-bin.tar.gz"
+          BIN_NAME="nacos-backend-${VERSION}-${ARCH}-bin.tar.gz"
           cp "${DIST_TGZ}" "release-work/${BIN_NAME}"
           cp "${DIST_TGZ}" docker-context/nacos.tar.gz
           cp packaging/docker/Dockerfile docker-context/Dockerfile
