@@ -18,8 +18,8 @@ GitHub Actions will run `.github/workflows/backend-release.yml` and build releas
 For each architecture, the workflow produces:
 
 ```text
-nacos-backend-<version>-bin.tar.gz
-nacos-backend-<version>-bin.tar.gz.sha256
+nacos-backend-<version>-<arch>-bin.tar.gz
+nacos-backend-<version>-<arch>-bin.tar.gz.sha256
 nacos-backend-<version>-<arch>-docker.tar.gz
 nacos-backend-<version>-<arch>-docker.tar.gz.sha256
 nacos-backend-<version>-<arch>.run
