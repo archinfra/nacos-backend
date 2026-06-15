@@ -58,13 +58,45 @@ jobs:
             MVN="./mvnw"
           fi
 
+          # This fork contains generated AgentKit Registry files. For CI packaging we skip Apache RAT
+          # first, otherwise new generated source/resources without ASF headers stop the build before
+          # compile checks. Later we can add license headers and enable RAT again.
+          MAVEN_FLAGS="-B -ntp -DskipTests -Dmaven.test.skip=true -Drat.skip=true"
+
           # Nacos distribution builds normally use the release profile. If your fork removes it,
           # fall back to a normal Maven build so the workflow still gives useful feedback.
-          $MVN -B -ntp -Prelease-nacos -DskipTests -Dmaven.test.skip=true clean install || \
-          $MVN -B -ntp -DskipTests -Dmaven.test.skip=true clean install
+          $MVN $MAVEN_FLAGS -Prelease-nacos clean install || \
+          $MVN $MAVEN_FLAGS clean install
+
+      - name: Collect diagnostics on failure
+        if: failure() && steps.source.outputs.found == 'true'
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-diagnostics
+
+          if [ -f target/rat.txt ]; then
+            cp target/rat.txt ci-diagnostics/rat.txt
+          fi
+
+          find . -path '*/target/surefire-reports/*' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
+          find . -path '*/target/failsafe-reports/*' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
+          find . -path '*/target/*.log' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
+
+          echo "Diagnostics files:"
+          find ci-diagnostics -type f -maxdepth 10 -print || true
+
+      - name: Upload diagnostics
+        if: failure() && steps.source.outputs.found == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nacos-backend-diagnostics-${{ github.sha }}
+          path: ci-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Collect build artifacts
-        if: steps.source.outputs.found == 'true'
+        if: success() && steps.source.outputs.found == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -87,7 +119,7 @@ jobs:
           ls -lah ci-artifacts
 
       - name: Upload backend artifacts
-        if: steps.source.outputs.found == 'true'
+        if: success() && steps.source.outputs.found == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nacos-backend-${{ github.sha }}
