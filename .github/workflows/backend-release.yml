@@ -1,0 +1,197 @@
+name: Backend Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without leading v, for example 0.1.0. Empty means use ref name.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: backend-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+
+jobs:
+  package:
+    name: Package ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.version || '' }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "Version is empty" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend distribution
+        shell: bash
+        run: |
+          set -euxo pipefail
+          MVN="mvn"
+          if [ -f ./mvnw ]; then
+            chmod +x ./mvnw
+            MVN="./mvnw"
+          fi
+          MAVEN_FLAGS="-B -ntp -DskipTests -Dmaven.test.skip=true -Drat.skip=true -Dcheckstyle.skip=true"
+          $MVN $MAVEN_FLAGS -Prelease-nacos clean install || \
+          $MVN $MAVEN_FLAGS clean install
+
+      - name: Prepare binary distribution
+        id: dist
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          mkdir -p release-work docker-context
+
+          DIST_TGZ="$(find distribution/target -type f -name 'nacos-server-*.tar.gz' | sort | tail -n 1 || true)"
+          if [ -z "${DIST_TGZ}" ]; then
+            DIST_TGZ="$(find distribution/target -type f -name '*.tar.gz' | sort | tail -n 1 || true)"
+          fi
+          if [ -z "${DIST_TGZ}" ]; then
+            echo "No distribution tar.gz found under distribution/target" >&2
+            find distribution/target -type f | sort >&2 || true
+            exit 1
+          fi
+
+          BIN_NAME="nacos-backend-${VERSION}-bin.tar.gz"
+          cp "${DIST_TGZ}" "release-work/${BIN_NAME}"
+          cp "${DIST_TGZ}" docker-context/nacos.tar.gz
+          cp packaging/docker/Dockerfile docker-context/Dockerfile
+          sha256sum "release-work/${BIN_NAME}" > "release-work/${BIN_NAME}.sha256"
+
+          echo "binary=release-work/${BIN_NAME}" >> "$GITHUB_OUTPUT"
+          echo "binary_name=${BIN_NAME}" >> "$GITHUB_OUTPUT"
+          ls -lah release-work docker-context
+
+      - name: Build Docker image tar
+        id: image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          PLATFORM="${{ matrix.platform }}"
+          IMAGE_REF="${IMAGE_REPOSITORY}:${VERSION}-${ARCH}"
+          IMAGE_TAR="release-work/nacos-backend-${VERSION}-${ARCH}-docker.tar"
+          IMAGE_TAR_GZ="${IMAGE_TAR}.gz"
+
+          docker buildx build \
+            --platform "${PLATFORM}" \
+            --build-arg NACOS_TARBALL=nacos.tar.gz \
+            -t "${IMAGE_REF}" \
+            --output "type=docker,dest=${IMAGE_TAR}" \
+            docker-context
+
+          gzip -f "${IMAGE_TAR}"
+          sha256sum "${IMAGE_TAR_GZ}" > "${IMAGE_TAR_GZ}.sha256"
+
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          echo "image_tar_gz=${IMAGE_TAR_GZ}" >> "$GITHUB_OUTPUT"
+          ls -lah release-work
+
+      - name: Build offline .run installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x packaging/offline-run/build.sh packaging/offline-run/install.sh
+          bash packaging/offline-run/build.sh \
+            --arch "${{ matrix.arch }}" \
+            --version "${{ steps.version.outputs.version }}" \
+            --binary "${{ steps.dist.outputs.binary }}" \
+            --docker-image "${{ steps.image.outputs.image_tar_gz }}" \
+            --image-ref "${{ steps.image.outputs.image_ref }}" \
+            --out-dir release-work
+          ls -lah release-work
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nacos-backend-release-${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          path: |
+            release-work/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: package
+    timeout-minutes: 60
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd release-assets
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' ! -name '*.sha256' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          ls -lah
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Nacos Backend ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release-assets/*
