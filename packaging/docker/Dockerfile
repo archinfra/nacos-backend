@@ -6,20 +6,21 @@ ENV MODE=standalone \
     JAVA_OPT_EXT="" \
     NACOS_HOME=/home/nacos
 
-WORKDIR ${NACOS_HOME}
-
 COPY ${NACOS_TARBALL} /tmp/nacos.tar.gz
 
 RUN set -eux; \
-    tar -xzf /tmp/nacos.tar.gz -C /home; \
-    extracted="$(find /home -maxdepth 1 -type d -name 'nacos*' | head -n 1)"; \
-    if [ -n "${extracted}" ] && [ "${extracted}" != "${NACOS_HOME}" ]; then \
-      cp -a "${extracted}"/. "${NACOS_HOME}"/; \
-      rm -rf "${extracted}"; \
+    mkdir -p /tmp/nacos-extract "${NACOS_HOME}"; \
+    tar -xzf /tmp/nacos.tar.gz -C /tmp/nacos-extract; \
+    extracted="$(find /tmp/nacos-extract -mindepth 1 -maxdepth 1 -type d | head -n 1)"; \
+    if [ -z "${extracted}" ]; then \
+      extracted=/tmp/nacos-extract; \
     fi; \
-    rm -f /tmp/nacos.tar.gz; \
+    cp -a "${extracted}"/. "${NACOS_HOME}"/; \
+    rm -rf /tmp/nacos.tar.gz /tmp/nacos-extract; \
     chmod +x ${NACOS_HOME}/bin/*.sh || true; \
     mkdir -p ${NACOS_HOME}/logs
+
+WORKDIR ${NACOS_HOME}
 
 EXPOSE 8848 9848 9849
 
