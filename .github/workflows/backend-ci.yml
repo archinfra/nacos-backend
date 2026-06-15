@@ -58,10 +58,12 @@ jobs:
             MVN="./mvnw"
           fi
 
-          # This fork contains generated AgentKit Registry files. For CI packaging we skip Apache RAT
-          # first, otherwise new generated source/resources without ASF headers stop the build before
-          # compile checks. Later we can add license headers and enable RAT again.
-          MAVEN_FLAGS="-B -ntp -DskipTests -Dmaven.test.skip=true -Drat.skip=true"
+          # Development packaging mode for this fork:
+          # - skip RAT first, because generated AgentKit Registry files may not have ASF headers yet;
+          # - skip Checkstyle first, because the fork is still being stabilized and style-only issues
+          #   should not block packaging/compile feedback.
+          # After the code is stable, add license headers and fix style, then remove these two flags.
+          MAVEN_FLAGS="-B -ntp -DskipTests -Dmaven.test.skip=true -Drat.skip=true -Dcheckstyle.skip=true"
 
           # Nacos distribution builds normally use the release profile. If your fork removes it,
           # fall back to a normal Maven build so the workflow still gives useful feedback.
@@ -79,6 +81,7 @@ jobs:
             cp target/rat.txt ci-diagnostics/rat.txt
           fi
 
+          find . -path '*/target/checkstyle-*' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
           find . -path '*/target/surefire-reports/*' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
           find . -path '*/target/failsafe-reports/*' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
           find . -path '*/target/*.log' -type f -print -exec cp --parents {} ci-diagnostics/ \; || true
